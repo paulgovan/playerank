@@ -27,7 +27,7 @@ The framework runs in 4 sequential phases. All scripts are in `playerank/utils/`
 ```bash
 python playerank/utils/compute_features_weight.py
 ```
-Output: `playerank/conf/features_weigths.json`
+Output: `playerank/conf/features_weights.json`
 
 **Phase 2 — Compute player roles** (uses clustering on positional features):
 ```bash
@@ -67,7 +67,7 @@ Input events are Wyscout-format JSON with fields: `id`, `type`, `position`, `tim
 - `Clusterer.py`: K-means clustering (8–9 clusters) on positional features to define player roles
 
 ### Configuration
-- `playerank/conf/features_weigths.json`: Pre-computed feature weights (30+ features). Negative weights are intentional — they reflect inverse relationships in LinearSVC coefficients.
+- `playerank/conf/features_weights.json`: Pre-computed feature weights (30+ features). Negative weights are intentional — they reflect inverse relationships in LinearSVC coefficients.
 
 ### Key Design Pattern
 The utility scripts in `playerank/utils/` orchestrate full pipeline phases by composing `Feature` and `Aggregation` subclasses, passing their outputs through model classes, and writing JSON results to `data/`.
