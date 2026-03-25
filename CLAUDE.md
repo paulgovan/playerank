@@ -7,8 +7,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 cd playerank
 pip install -e .
-# or install dependencies directly:
-pip install pandas==0.23.4 scipy==0.17.1 numpy==1.11.0 scikit_learn==0.21.3
 ```
 
 ## Data Setup
@@ -21,25 +19,19 @@ python data_download.py
 
 ## Running the Pipeline
 
-The framework runs in 4 sequential phases. All scripts are in `playerank/utils/`:
+Run all phases at once from the repo root:
 
-**Phase 1 — Learn feature weights** (uses team-level events):
 ```bash
-python playerank/utils/compute_features_weight.py
+python run_pipeline.py
 ```
-Output: `playerank/conf/features_weights.json`
 
-**Phase 2 — Compute player roles** (uses clustering on positional features):
-```bash
-python playerank/utils/compute_roles.py
-```
-Output: role matrix JSON mapping player positions to clusters
+Or run individual phases as modules (works from any directory):
 
-**Phase 3 & 4 — Compute playerank scores and rankings**:
 ```bash
-python playerank/utils/compute_playerank.py
+python -m playerank.utils.compute_features_weight  # Phase 1: feature weights → playerank/conf/features_weights.json
+python -m playerank.utils.compute_roles            # Phase 2: player roles    → playerank/conf/role_matrix.json
+python -m playerank.utils.compute_playerank        # Phase 3+4: scores/ranks  → data/playerank.json
 ```
-Output: `data/playerank.json`
 
 ## Architecture
 
