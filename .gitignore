@@ -20,3 +20,6 @@ build/
 .env
 .venv/
 venv/
+
+# Data (download via data_download.py)
+data/
