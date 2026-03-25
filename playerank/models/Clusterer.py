@@ -464,7 +464,10 @@ class Clusterer(BaseEstimator, ClusterMixin):
                     if silhouette <= threshold:
                         multicluster_labels[i].append(label)
 
-        return np.array(multicluster_labels)
+        result = np.empty(len(multicluster_labels), dtype=object)
+        for i, lbl in enumerate(multicluster_labels):
+            result[i] = lbl
+        return result
 
     def predict(self, X, y=None):
         """
