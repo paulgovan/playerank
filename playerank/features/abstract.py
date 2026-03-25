@@ -1,7 +1,6 @@
 import abc
 
-class Feature(object):
-    __metaclass__ = abc.ABCMeta
+class Feature(abc.ABC):
     """
     class to wrap all the scripts/method to aggregate features from the database
     """
@@ -21,24 +20,22 @@ class Feature(object):
         """
         return 
 
-class Aggregation(object):
-    __metaclass__ = abc.ABCMeta
-    
+class Aggregation(abc.ABC):
     """
     defines the methods to aggregate one/more collection of features  for each match
-    it have to provide results as a dataframe, 
-    
-    e.g. 
+    it have to provide results as a dataframe,
+
+    e.g.
     it is used to compute relative feature for each match
     match -> team (or entity) -> featureTeam - featureOppositor
-    
+
     """
 
-    @abc.abstractproperty
+    @abc.abstractmethod
     def get_features(self):
-        
+
         return 'Should never get here'
-    @abc.abstractproperty
+    @abc.abstractmethod
     def set_features(self, collection_list):
         """
         set the list of collection to use for relative features computing
