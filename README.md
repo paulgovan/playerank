@@ -1,6 +1,8 @@
-# PlayeRank
+# PlayeRank (Extended)
 
-PlayeRank, a data-driven framework that offers a principled multi-dimensional and role-aware evaluation of the performance of soccer players. 
+This is a modified version of the original PlayeRank framework that introduces a **lack-of-performance model** alongside the standard performance model. In addition to identifying which player actions are most associated with winning, this version also learns which actions are most associated with losing — quantifying "waste" in matches and player behaviour. The two models are combined into a **net score** (`playerankScore − wasteScore`) that provides a more complete picture of individual player contribution.
+
+The original PlayeRank is a data-driven framework that offers a principled multi-dimensional and role-aware evaluation of the performance of soccer players.
 
 Playerank is designed to work with [soccer-logs](https://www.nature.com/articles/s41597-019-0247-7), in which a match consists of a sequence of events encoded as a tuple: `id`, `type`, `position`, `timestamp`,where `id` is the identifer of the player that originated/refers to this event, `type` is the event type (i.e., passes, shots, goals, tackles, etc.), `position` and `timestamp` denote the spatio-temporal coordinates of the event over the soccer field. PlayeRank assumes that soccer-logs are stored into a database, which is updated with new events after each soccer match.
 
@@ -44,9 +46,34 @@ keywords = {data science, soccer analytics, clustering, searching, multi-dimensi
 To build player rankings from soccer-logs data, the following steps are required:
 
 1. compute feature weights (learning)
-2. compute roles (learning)
-3. compute performance scores (rating)
-4. aggregate performance scores (ranking)
+2. compute lack-of-performance weights (learning)
+3. compute roles (learning)
+4. compute performance scores (rating)
+5. compute lack-of-performance scores and net scores (rating)
+6. aggregate scores (ranking)
+
+All steps can be run at once via `run_pipeline.py`, or individually as modules:
+
+```bash
+python run_pipeline.py
+
+# or step by step:
+python -m playerank.utils.compute_features_weight
+python -m playerank.utils.compute_lack_of_performance_weights
+python -m playerank.utils.compute_roles
+python -m playerank.utils.compute_playerank
+python -m playerank.utils.compute_lack_of_performance
+```
+
+### Lack-of-performance model
+
+The lack-of-performance model trains a Linear SVM with **loss as the positive class**, learning which actions are statistically associated with a team losing matches. Applied at the player level, it produces a `wasteScore` for each player per match. Combined with the standard `playerankScore`, a `netScore` is computed:
+
+```
+netScore = playerankScore − wasteScore
+```
+
+A high `netScore` indicates a player who contributes positively and wastes few actions. A low (or negative) `netScore` indicates a player whose wasteful actions outweigh their positive contributions.
 
 The code to reproduce the PlayRank framework is available as a Google Colab document here: 
 http://bit.ly/playerank_Tutorial
