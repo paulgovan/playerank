@@ -124,6 +124,10 @@ if "roleCluster" in fdf.columns:
     player_df["roleCluster"] = player_df["entity"].map(role_map)
 player_df["matchesPlayed"] = player_df["entity"].map(match_counts)
 
+# Percentile ranks (0–100) for each score column
+for col in SCORE_COLS:
+    player_df[f"{col}_pct"] = player_df[col].rank(pct=True).mul(100).round(1)
+
 # ---------------------------------------------------------------------------
 # Summary metrics
 # ---------------------------------------------------------------------------
@@ -174,12 +178,22 @@ with tab1:
 
     st.markdown("---")
     st.markdown("**Full player table**")
-    st.dataframe(
-        player_df[["playerName", "roleCluster", "matchesPlayed"] + SCORE_COLS]
+    pct_col = f"{score_choice}_pct"
+    display_cols = ["playerName", "roleCluster", "matchesPlayed"] + SCORE_COLS + (
+        [pct_col] if pct_col in player_df.columns else []
+    )
+    full_table = (
+        player_df[display_cols]
         .sort_values(score_choice, ascending=False)
         .rename(columns={"playerName": "Player", "roleCluster": "Role",
-                          "matchesPlayed": "Matches"}),
-        use_container_width=True, hide_index=True,
+                          "matchesPlayed": "Matches", pct_col: "Percentile"})
+    )
+    st.dataframe(full_table, use_container_width=True, hide_index=True)
+    st.download_button(
+        label="Download table as CSV",
+        data=full_table.to_csv(index=False),
+        file_name="playerank_leaderboard.csv",
+        mime="text/csv",
     )
 
 # ── Tab 2: Score Analysis ───────────────────────────────────────────────────
@@ -210,6 +224,23 @@ with tab2:
             },
             title="Performance Score vs Waste Score (size = matches played, colour = net score)",
         )
+        # Quadrant reference lines at median values
+        x_mid = player_df["playerankScore"].median()
+        y_mid = player_df["wasteScore"].median()
+        fig_scatter.add_vline(x=x_mid, line_dash="dot", line_color="grey", opacity=0.4)
+        fig_scatter.add_hline(y=y_mid, line_dash="dot", line_color="grey", opacity=0.4)
+        x_range = player_df["playerankScore"].agg(["min", "max"])
+        y_range = player_df["wasteScore"].agg(["min", "max"])
+        label_style = dict(xref="x", yref="y", showarrow=False,
+                           font=dict(size=11, color="rgba(200,200,200,0.6)"))
+        fig_scatter.add_annotation(x=x_range["min"], y=y_range["min"],
+            text="Low performance, low waste", xanchor="left", yanchor="bottom", **label_style)
+        fig_scatter.add_annotation(x=x_range["min"], y=y_range["max"],
+            text="Low performance, high waste", xanchor="left", yanchor="top", **label_style)
+        fig_scatter.add_annotation(x=x_range["max"], y=y_range["min"],
+            text="High performance, low waste (ideal)", xanchor="right", yanchor="bottom", **label_style)
+        fig_scatter.add_annotation(x=x_range["max"], y=y_range["max"],
+            text="High performance, high waste", xanchor="right", yanchor="top", **label_style)
         fig_scatter.update_layout(height=550)
         st.plotly_chart(fig_scatter, use_container_width=True)
 
@@ -304,16 +335,35 @@ with tab4:
             timeline_df = player_matches[["match"] + available_scores].copy()
             timeline_df["match"] = timeline_df["match"].astype(str)
 
+            roll_window = st.slider(
+                "Rolling average window (matches)", min_value=1,
+                max_value=max(3, len(timeline_df) // 2), value=min(5, len(timeline_df)),
+                help="Set to 1 to show raw match-by-match values",
+            )
+
             fig_line = go.Figure()
             line_colours = {"playerankScore": "#2ecc71", "wasteScore": "#e74c3c", "netScore": "#3498db"}
+            xs = list(range(len(timeline_df)))
             for score_col in available_scores:
+                colour = line_colours.get(score_col)
+                raw_y = timeline_df[score_col].tolist()
+                # Raw values as faint markers
                 fig_line.add_trace(go.Scatter(
-                    x=list(range(len(timeline_df))),
-                    y=timeline_df[score_col],
-                    mode="lines+markers",
-                    name=SCORE_LABELS.get(score_col, score_col),
-                    line=dict(color=line_colours.get(score_col)),
+                    x=xs, y=raw_y,
+                    mode="markers",
+                    name=f"{SCORE_LABELS.get(score_col, score_col)} (raw)",
+                    marker=dict(color=colour, opacity=0.35, size=6),
+                    showlegend=False,
                     hovertemplate=f"Match %{{x}}<br>{SCORE_LABELS.get(score_col, score_col)}: %{{y:.4f}}<extra></extra>",
+                ))
+                # Rolling average as solid line
+                rolled = timeline_df[score_col].rolling(roll_window, min_periods=1).mean()
+                fig_line.add_trace(go.Scatter(
+                    x=xs, y=rolled.tolist(),
+                    mode="lines",
+                    name=SCORE_LABELS.get(score_col, score_col),
+                    line=dict(color=colour, width=2),
+                    hovertemplate=f"Match %{{x}}<br>{SCORE_LABELS.get(score_col, score_col)} ({roll_window}-match avg): %{{y:.4f}}<extra></extra>",
                 ))
             fig_line.add_hline(y=0, line_dash="dash", line_color="grey", opacity=0.5)
             fig_line.update_layout(
