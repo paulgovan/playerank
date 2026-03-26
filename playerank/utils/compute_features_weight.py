@@ -17,7 +17,7 @@ def compute_feature_weights(output_path):
     aggregation.set_features([quality, goals])
     df = aggregation.aggregate(to_dataframe=True)
 
-    weighter = Weighter.Weighter(label_type='wd-l')
+    weighter = Weighter.Weighter(label_type='w-dl')
     weighter.fit(df, 'goal-scored', filename=output_path)
     print("features weights stored in %s" % output_path)
 
