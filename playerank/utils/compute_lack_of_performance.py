@@ -53,5 +53,9 @@ if 'playerankScore' in df.columns and 'wasteScore' in df.columns:
 
 out = _DATA / 'dashboard_data.csv'
 df.to_csv(out, index=False)
-print("Dashboard data saved to %s" % out)
+# Also write to results/ so the dashboard has data even without local pipeline output
+results_out = _ROOT / 'results' / 'dashboard_data.csv'
+results_out.parent.mkdir(exist_ok=True)
+df.to_csv(results_out, index=False)
+print("Dashboard data saved to %s and %s" % (out, results_out))
 print(df[['entity', 'playerankScore', 'wasteScore', 'netScore']].head())

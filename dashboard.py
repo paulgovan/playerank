@@ -21,7 +21,13 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 _ROOT = Path(__file__).parent
 _DATA = _ROOT / "data"
-_DASHBOARD_CSV = _DATA / "dashboard_data.csv"
+# results/ is tracked by git and holds the committed sample dataset;
+# data/ holds locally-generated pipeline output (gitignored).
+_DASHBOARD_CSV = (
+    _ROOT / "data" / "dashboard_data.csv"
+    if (_ROOT / "data" / "dashboard_data.csv").exists()
+    else _ROOT / "results" / "dashboard_data.csv"
+)
 _PLAYERS_JSON = _DATA / "players.json"
 
 # ---------------------------------------------------------------------------
@@ -66,8 +72,9 @@ st.markdown(
 
 if df is None:
     st.error(
-        "No dashboard data found. Please run the full pipeline first:\n\n"
-        "```\npython run_pipeline.py\n```"
+        "No dashboard data found. Run the full pipeline to generate real data:\n\n"
+        "```\npython run_pipeline.py\n```\n\n"
+        "Or place a `dashboard_data.csv` file in `results/` for a sample view."
     )
     st.stop()
 
