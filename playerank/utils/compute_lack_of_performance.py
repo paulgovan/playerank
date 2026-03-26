@@ -51,4 +51,7 @@ df = aggregation.aggregate(to_dataframe=True)
 if 'playerankScore' in df.columns and 'wasteScore' in df.columns:
     df['netScore'] = df['playerankScore'] - df['wasteScore']
 
+out = _DATA / 'dashboard_data.csv'
+df.to_csv(out, index=False)
+print("Dashboard data saved to %s" % out)
 print(df[['entity', 'playerankScore', 'wasteScore', 'netScore']].head())
