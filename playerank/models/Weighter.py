@@ -47,6 +47,14 @@ class Weighter(BaseEstimator):
         by 'np.random'.
     """
     def __init__(self, label_type='w-dl', random_state=42):
+        """
+        label_type options:
+          Performance model:  'w-dl'  (win vs draw/loss)
+                              'wd-l'  (win/draw vs loss)
+                              'w-d-l' (win vs draw vs loss, three-class)
+          Lack-of-performance:'dl-w'  (draw/loss vs win)  -- inverse of w-dl
+                              'l-wd'  (loss vs win/draw)  -- inverse of wd-l
+        """
         self.label_type_ = label_type
         self.random_state_ = random_state
 
@@ -82,7 +90,11 @@ class Weighter(BaseEstimator):
         if self.label_type_ == 'w-dl':
             y = dataframe[target].apply(lambda x: 1 if x > 0 else -1)
         elif self.label_type_ == 'wd-l':
-            y = dataframe[target].apply(lambda x: 1 if x >= 0 else -1 )
+            y = dataframe[target].apply(lambda x: 1 if x >= 0 else -1)
+        elif self.label_type_ == 'dl-w':
+            y = dataframe[target].apply(lambda x: 1 if x <= 0 else -1)
+        elif self.label_type_ == 'l-wd':
+            y = dataframe[target].apply(lambda x: 1 if x < 0 else -1)
         else:
             y = dataframe[target].apply(lambda x: 1 if x > 0 else 0 if x==0 else 2)
         X = dataframe.loc[:, dataframe.columns != target].values
