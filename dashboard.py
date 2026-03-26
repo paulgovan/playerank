@@ -29,6 +29,7 @@ _DASHBOARD_CSV = (
     else _ROOT / "results" / "dashboard_data.csv"
 )
 _PLAYERS_JSON = _DATA / "players.json"
+_ROLE_MATRIX_JSON = _ROOT / "playerank" / "conf" / "role_matrix.json"
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -60,6 +61,117 @@ def load_data():
 
 
 df, names = load_data()
+
+
+@st.cache_data
+def load_role_cluster_centers():
+    """Compute cluster centroids from role_matrix.json (Wyscout 0–100 coords)."""
+    if not _ROLE_MATRIX_JSON.exists():
+        return None
+    matrix = json.loads(_ROLE_MATRIX_JSON.read_text())
+    from collections import defaultdict
+    points = defaultdict(list)
+    for x_str, y_dict in matrix.items():
+        for y_str, label in y_dict.items():
+            # label may be "3" or "3-5" (multi-cluster); use first
+            primary = int(str(label).split("-")[0])
+            points[primary].append((int(x_str), int(y_str)))
+    centroids = {}
+    for cluster_id, pts in points.items():
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        centroids[cluster_id] = (cx, cy)
+    return centroids
+
+
+def draw_soccer_field(cluster_centers):
+    """Return a Plotly figure of a soccer field with cluster centroids.
+
+    Display orientation: x-axis = Wyscout y (field width, 0–100),
+    y-axis = Wyscout x (field depth, 0=defensive end, 100=attacking end).
+    """
+    # helper to add a white line/rect
+    def line(x0, y0, x1, y1, w=1.5):
+        return dict(type="line", x0=x0, y0=y0, x1=x1, y1=y1,
+                    line=dict(color="white", width=w))
+
+    def rect(x0, y0, x1, y1, w=1.5, fill="rgba(0,0,0,0)"):
+        return dict(type="rect", x0=x0, y0=y0, x1=x1, y1=y1,
+                    line=dict(color="white", width=w), fillcolor=fill)
+
+    def circle(cx, cy, r, w=1.5):
+        return dict(type="circle", x0=cx - r, y0=cy - r, x1=cx + r, y1=cy + r,
+                    line=dict(color="white", width=w), fillcolor="rgba(0,0,0,0)")
+
+    shapes = [
+        # pitch outline
+        rect(0, 0, 100, 100, w=2),
+        # halfway line
+        line(0, 50, 100, 50),
+        # centre circle (radius ~9 in 0-100 space)
+        circle(50, 50, 9),
+        # penalty areas
+        rect(21, 0, 79, 17),        # defensive end
+        rect(21, 83, 79, 100),      # attacking end
+        # goal areas
+        rect(37, 0, 63, 6),
+        rect(37, 94, 63, 100),
+        # goals (outside field boundary)
+        rect(43, -3, 57, 0, fill="#3a6e4c"),
+        rect(43, 100, 57, 103, fill="#3a6e4c"),
+        # penalty arcs (approximate semicircles as circles)
+        circle(50, 11, 9),
+        circle(50, 89, 9),
+    ]
+
+    fig = go.Figure()
+    fig.update_layout(shapes=shapes)
+
+    # pitch background
+    fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100,
+                  fillcolor="#4a7c59", line=dict(width=0), layer="below")
+
+    # penalty spots & centre spot
+    fig.add_trace(go.Scatter(
+        x=[50, 50, 50], y=[50, 11, 89],
+        mode="markers", marker=dict(color="white", size=4),
+        showlegend=False, hoverinfo="skip",
+    ))
+
+    # cluster positions
+    if cluster_centers:
+        palette = px.colors.qualitative.Bold
+        ids = sorted(cluster_centers)
+        xs = [cluster_centers[cid][1] for cid in ids]   # Wyscout y → display x
+        ys = [cluster_centers[cid][0] for cid in ids]   # Wyscout x → display y
+        colors = [palette[int(cid) % len(palette)] for cid in ids]
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys,
+            mode="markers+text",
+            marker=dict(color=colors, size=20,
+                        line=dict(color="white", width=1.5)),
+            text=[str(cid) for cid in ids],
+            textposition="middle center",
+            textfont=dict(color="white", size=9, family="Arial Black"),
+            customdata=[[f"({cluster_centers[cid][0]:.0f}, {cluster_centers[cid][1]:.0f})"]
+                        for cid in ids],
+            hovertemplate="Cluster %{text}<br>Avg position (x,y): %{customdata[0]}<extra></extra>",
+            showlegend=False,
+        ))
+
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=4, b=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(range=[-4, 104], showgrid=False, zeroline=False,
+                   showticklabels=False, fixedrange=True),
+        yaxis=dict(range=[-6, 106], showgrid=False, zeroline=False,
+                   showticklabels=False, scaleanchor="x", scaleratio=1,
+                   fixedrange=True),
+        height=280,
+    )
+    return fig
+
 
 # ---------------------------------------------------------------------------
 # Header
@@ -104,6 +216,27 @@ min_matches = st.sidebar.slider(
     max_value=int(df.groupby("entity")["match"].nunique().max()),
     value=5,
 )
+
+# ── Sidebar: Role cluster field reference ────────────────────────────────────
+st.sidebar.divider()
+st.sidebar.subheader("Role Cluster Map")
+st.sidebar.caption(
+    "Approximate pitch positions of each role cluster "
+    "(centre of performance, Wyscout coords). "
+    "Attack direction: bottom → top."
+)
+_cluster_centers = load_role_cluster_centers()
+if _cluster_centers:
+    st.sidebar.plotly_chart(
+        draw_soccer_field(_cluster_centers),
+        use_container_width=True,
+        config={"displayModeBar": False},
+    )
+else:
+    st.sidebar.info(
+        "Run the full pipeline to generate role cluster positions:\n\n"
+        "```\npython run_pipeline.py\n```"
+    )
 
 # Apply filters
 match_counts = df.groupby("entity")["match"].nunique()
@@ -203,8 +336,8 @@ with tab2:
     if "playerankScore" in player_df.columns and "wasteScore" in player_df.columns:
         st.markdown("#### Performance vs Waste")
         st.markdown(
-            "Players in the **top-left** have high performance and low waste (ideal). "
-            "Players in the **bottom-right** have low performance and high waste."
+            "Players in the **bottom-right** have high performance and low waste (ideal). "
+            "Players in the **top-left** have low performance and high waste."
         )
         fig_scatter = px.scatter(
             player_df,
