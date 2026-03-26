@@ -16,10 +16,10 @@ def compute_lack_of_performance_weights(output_path):
     statistically linked to a team losing matches.
     """
     qualityFeat = qualityFeatures.qualityFeatures()
-    quality = qualityFeat.createFeature(events_path=str(_DATA / 'events'),
+    quality = qualityFeat.createFeature(events_path=str(_DATA / 'events' / '*.json'),
                         players_file=str(_DATA / 'players.json'), entity='team')
     gs = goalScoredFeatures.goalScoredFeatures()
-    goals = gs.createFeature(str(_DATA / 'matches'))
+    goals = gs.createFeature(str(_DATA / 'matches' / '*.json'))
     aggregation = relativeAggregation.relativeAggregation()
     aggregation.set_features([quality, goals])
     df = aggregation.aggregate(to_dataframe=True)

@@ -9,7 +9,7 @@ _CONF = Path(__file__).parent.parent / 'conf'
 
 def compute_roleMatrix(output_path):
     centerfeat = centerOfPerformanceFeature.centerOfPerformanceFeature()
-    centerfeat = centerfeat.createFeature(events_path=str(_DATA / 'events'),
+    centerfeat = centerfeat.createFeature(events_path=str(_DATA / 'events' / '*.json'),
                         players_file=str(_DATA / 'players.json'))
 
     aggregation = plainAggregation.plainAggregation()

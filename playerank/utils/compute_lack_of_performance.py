@@ -13,7 +13,7 @@ performance_weights_file = str(_CONF / 'features_weights.json')
 
 # Quality features (player level)
 qualityFeat = qualityFeatures.qualityFeatures()
-quality = qualityFeat.createFeature(events_path=str(_DATA / 'events'),
+quality = qualityFeat.createFeature(events_path=str(_DATA / 'events' / '*.json'),
                     players_file=str(_DATA / 'players.json'), entity='player')
 
 # Waste score: weighted by loss-associated feature weights
@@ -31,12 +31,12 @@ for doc in waste:
     doc['feature'] = 'wasteScore'
 
 matchPlayedFeat = matchPlayedFeatures.matchPlayedFeatures()
-matchplayed = matchPlayedFeat.createFeature(matches_path=str(_DATA / 'matches'),
+matchplayed = matchPlayedFeat.createFeature(matches_path=str(_DATA / 'matches' / '*.json'),
                     players_file=str(_DATA / 'players.json'))
 
 center_performance = centerOfPerformanceFeature.centerOfPerformanceFeature()
 center_performance = center_performance.createFeature(
-    events_path=str(_DATA / 'events'),
+    events_path=str(_DATA / 'events' / '*.json'),
     players_file=str(_DATA / 'players.json'))
 
 roleFeat = roleFeatures.roleFeatures()
