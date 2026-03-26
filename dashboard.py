@@ -30,6 +30,9 @@ _DASHBOARD_CSV = (
 )
 _PLAYERS_JSON = _DATA / "players.json"
 _ROLE_MATRIX_JSON = _ROOT / "playerank" / "conf" / "role_matrix.json"
+_CONF = _ROOT / "playerank" / "conf"
+_PERF_WEIGHTS_JSON = _CONF / "features_weights.json"
+_WASTE_WEIGHTS_JSON = _CONF / "lack_of_performance_weights.json"
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -82,6 +85,31 @@ def load_role_cluster_centers():
         cy = sum(p[1] for p in pts) / len(pts)
         centroids[cluster_id] = (cx, cy)
     return centroids
+
+
+@st.cache_data
+def load_feature_weights():
+    """Load performance and waste weights; return a merged DataFrame."""
+    if not _PERF_WEIGHTS_JSON.exists() or not _WASTE_WEIGHTS_JSON.exists():
+        return None
+    perf = json.loads(_PERF_WEIGHTS_JSON.read_text())
+    waste = json.loads(_WASTE_WEIGHTS_JSON.read_text())
+    all_features = sorted(set(perf) | set(waste))
+    rows = []
+    for feat in all_features:
+        parts = feat.split("-")
+        category = parts[0].strip()
+        subcategory = parts[1].strip() if len(parts) > 1 else ""
+        outcome = parts[2].strip() if len(parts) > 2 else ""
+        rows.append({
+            "feature": feat,
+            "category": category,
+            "subcategory": subcategory,
+            "outcome": outcome,
+            "perfWeight": perf.get(feat, 0.0),
+            "wasteWeight": waste.get(feat, 0.0),
+        })
+    return pd.DataFrame(rows)
 
 
 def draw_soccer_field(cluster_centers):
@@ -275,7 +303,7 @@ st.divider()
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["🏆 Leaderboard", "📊 Score Analysis", "🎭 Role Breakdown", "👤 Player Profile"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏆 Leaderboard", "📊 Score Analysis", "🎭 Role Breakdown", "👤 Player Profile", "⚙️ Feature Weights"])
 
 # ── Tab 1: Leaderboard ──────────────────────────────────────────────────────
 with tab1:
@@ -526,3 +554,117 @@ with tab4:
         # Raw match data
         with st.expander("Raw match data"):
             st.dataframe(player_matches, use_container_width=True, hide_index=True)
+
+# ── Tab 5: Feature Weights ───────────────────────────────────────────────────
+with tab5:
+    st.subheader("Feature Weights")
+    st.markdown(
+        "How much each event type and sub-type drives the **Performance** "
+        "(win-associated) and **Waste** (loss-associated) scores. "
+        "Weights are LinearSVC coefficients normalised so |weights| sum to 1."
+    )
+
+    fw = load_feature_weights()
+
+    if fw is None:
+        st.info(
+            "Weight files not found. Run the pipeline to generate them:\n\n"
+            "```\npython run_pipeline.py\n```"
+        )
+    else:
+        # ── Section 1: Top features ──────────────────────────────────────────
+        st.markdown("### Top features by weight")
+        top_n = st.slider("Number of features to show", 5, len(fw), 15, key="fw_topn")
+
+        col_p, col_w = st.columns(2)
+
+        # Performance
+        with col_p:
+            st.markdown("#### Performance score")
+            st.caption("Positive = win-associated · Negative = loss-associated")
+            top_perf = fw.nlargest(top_n // 2, "perfWeight").assign(group="positive").pipe(
+                lambda d: pd.concat([d, fw.nsmallest(top_n - top_n // 2, "perfWeight").assign(group="negative")])
+            ).sort_values("perfWeight")
+            fig_p = px.bar(
+                top_perf, x="perfWeight", y="feature", orientation="h",
+                color="group",
+                color_discrete_map={"positive": "#2ecc71", "negative": "#e74c3c"},
+                labels={"perfWeight": "Weight", "feature": ""},
+                height=max(350, top_n * 22),
+            )
+            fig_p.update_layout(showlegend=False, margin=dict(l=0, r=10, t=10, b=30))
+            fig_p.add_vline(x=0, line_dash="dash", line_color="grey", opacity=0.5)
+            st.plotly_chart(fig_p, use_container_width=True)
+
+        # Waste
+        with col_w:
+            st.markdown("#### Waste score")
+            st.caption("Positive = loss-associated · Negative = not-loss-associated")
+            top_waste = fw.nlargest(top_n // 2, "wasteWeight").assign(group="positive").pipe(
+                lambda d: pd.concat([d, fw.nsmallest(top_n - top_n // 2, "wasteWeight").assign(group="negative")])
+            ).sort_values("wasteWeight")
+            fig_w = px.bar(
+                top_waste, x="wasteWeight", y="feature", orientation="h",
+                color="group",
+                color_discrete_map={"positive": "#e74c3c", "negative": "#2ecc71"},
+                labels={"wasteWeight": "Weight", "feature": ""},
+                height=max(350, top_n * 22),
+            )
+            fig_w.update_layout(showlegend=False, margin=dict(l=0, r=10, t=10, b=30))
+            fig_w.add_vline(x=0, line_dash="dash", line_color="grey", opacity=0.5)
+            st.plotly_chart(fig_w, use_container_width=True)
+
+        # ── Section 2: By event category ─────────────────────────────────────
+        st.markdown("### By event category")
+        st.caption(
+            "Sum of positive weights per category — how much each event type "
+            "contributes to winning (performance) vs losing (waste)."
+        )
+        cat_df = (
+            fw.groupby("category")[["perfWeight", "wasteWeight"]]
+            .apply(lambda g: pd.Series({
+                "Performance (win-assoc.)": g.loc[g["perfWeight"] > 0, "perfWeight"].sum(),
+                "Waste (loss-assoc.)": g.loc[g["wasteWeight"] > 0, "wasteWeight"].sum(),
+            }))
+            .reset_index()
+            .melt(id_vars="category", var_name="model", value_name="totalWeight")
+        )
+        fig_cat = px.bar(
+            cat_df, x="category", y="totalWeight", color="model", barmode="group",
+            color_discrete_map={
+                "Performance (win-assoc.)": "#2ecc71",
+                "Waste (loss-assoc.)": "#e74c3c",
+            },
+            labels={"totalWeight": "Sum of positive weights", "category": "Event category", "model": ""},
+            height=380,
+        )
+        fig_cat.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02))
+        st.plotly_chart(fig_cat, use_container_width=True)
+
+        # ── Section 3: Performance vs Waste comparison scatter ────────────────
+        st.markdown("### Performance vs Waste weight comparison")
+        st.caption(
+            "Each dot is one feature. Features in the **top-left** are strongly "
+            "loss-associated (high waste) but not win-associated. "
+            "Features in the **bottom-right** drive performance but not waste."
+        )
+        fig_cmp = px.scatter(
+            fw, x="perfWeight", y="wasteWeight",
+            color="category", hover_name="feature",
+            hover_data={"perfWeight": ":.4f", "wasteWeight": ":.4f", "category": False},
+            labels={"perfWeight": "Performance weight", "wasteWeight": "Waste weight"},
+            height=450,
+        )
+        fig_cmp.add_hline(y=0, line_dash="dash", line_color="grey", opacity=0.4)
+        fig_cmp.add_vline(x=0, line_dash="dash", line_color="grey", opacity=0.4)
+        fig_cmp.update_layout(legend_title_text="Event category")
+        st.plotly_chart(fig_cmp, use_container_width=True)
+
+        # ── Raw weights table ─────────────────────────────────────────────────
+        with st.expander("Full weights table"):
+            st.dataframe(
+                fw[["feature", "category", "subcategory", "outcome", "perfWeight", "wasteWeight"]]
+                .sort_values("perfWeight", ascending=False)
+                .reset_index(drop=True),
+                use_container_width=True, hide_index=True,
+            )
