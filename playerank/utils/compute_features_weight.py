@@ -1,6 +1,7 @@
 from pathlib import Path
 from ..models import Weighter
 from ..features import qualityFeatures, relativeAggregation, goalScoredFeatures
+from ..features import chainFeatures
 
 _ROOT = Path(__file__).parent.parent.parent
 _DATA = _ROOT / 'data'
@@ -11,10 +12,16 @@ def compute_feature_weights(output_path):
     qualityFeat = qualityFeatures.qualityFeatures()
     quality = qualityFeat.createFeature(events_path=str(_DATA / 'events' / '*.json'),
                         players_file=str(_DATA / 'players.json'), entity='team')
+
+    chainFeat = chainFeatures.chainFeatures()
+    chains = chainFeat.createFeature(events_path=str(_DATA / 'events' / '*.json'),
+                        players_file=str(_DATA / 'players.json'), entity='team')
+
     gs = goalScoredFeatures.goalScoredFeatures()
     goals = gs.createFeature(str(_DATA / 'matches' / '*.json'))
+
     aggregation = relativeAggregation.relativeAggregation()
-    aggregation.set_features([quality, goals])
+    aggregation.set_features([quality, chains, goals])
     df = aggregation.aggregate(to_dataframe=True)
 
     weighter = Weighter.Weighter(label_type='w-dl')

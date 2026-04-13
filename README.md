@@ -75,6 +75,55 @@ netScore = playerankScore − wasteScore
 
 A high `netScore` indicates a player who contributes positively and wastes few actions. A low (or negative) `netScore` indicates a player whose wasteful actions outweigh their positive contributions.
 
+### Chain context model
+
+PlayeRank Extended introduces a **chain context model** that moves beyond isolated event counts to evaluate players based on their participation in multi-event possession sequences.
+
+A **possession chain** is a sequence of consecutive same-team events. A chain boundary is detected when:
+- The ball goes out of play or the referee whistles (`INTERRUPTION`, eventId 5)
+- A foul or offside occurs (`FOUL` eventId 2, `OFFSIDE` eventId 6)
+- The match period changes
+- Possession changes team, signalled by loss-of-possession tags on the previous event (`NOT_ACCURATE_TAG`, `DANGEROUS_BALL_LOST_TAG`, `INTERCEPTION_TAG`)
+
+#### Positive chain features (`chainScore`)
+
+Players receive credit for involvement in chains that end in a shot or goal:
+
+| Feature | Meaning |
+|---|---|
+| `chain-shot-participant` | Appeared in a chain ending in a shot |
+| `chain-goal-participant` | Appeared in a chain ending in a goal |
+| `chain-final-action` | Made the last non-shot action before a shot (key-pass analog) |
+
+These are weighted by a `Weighter(label_type='w-dl')` trained on chain-level team features, producing a `chainScore` per player per match.
+
+#### Harmful chain features (`chainWasteScore`)
+
+Mirroring the `wasteScore` pattern, a **harmful chain model** identifies players involved in sequences that precede conceding. Two types of harmful chain are tracked:
+
+*Type 1 — Turnover chains*: your team's chain ends in a dangerous turnover directly followed by an opponent shot or goal.
+
+| Feature | Meaning |
+|---|---|
+| `chain-turnover-precedes-shot` | Appeared in a chain whose turnover immediately preceded an opponent shot |
+| `chain-turnover-precedes-goal` | Same, but the opponent scored |
+| `chain-turnover-final-actor` | Made the last action before the turnover that led to an opponent shot/goal |
+
+*Type 2 — Conceded chains*: the opponent completes a chain ending in a shot or goal, attributed to defenders involved in that chain.
+
+| Feature | Meaning |
+|---|---|
+| `chain-conceded-shot` | Made a defensive action in a chain the opponent used to reach a shot |
+| `chain-conceded-goal` | Same, but the opponent scored |
+
+A `Weighter(label_type='l-wd')` learns which harmful chain patterns are most loss-associated, producing `chainWasteScore`. The two are combined into:
+
+```
+chainNetScore = chainScore − chainWasteScore
+```
+
+A high `chainNetScore` indicates a player who consistently appears in dangerous attacking sequences while rarely contributing to harmful turnovers or defensive breakdowns. Chain features are computed automatically within `compute_features_weight.py` and `compute_playerank.py` — no new standalone script is required.
+
 The code to reproduce the PlayRank framework is available as a Google Colab document here: 
 http://bit.ly/playerank_Tutorial
 

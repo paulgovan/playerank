@@ -228,6 +228,34 @@ SCORE_LABELS = {
     "netScore": "Net Score",
 }
 
+# Chain feature columns
+CHAIN_PART_COLS = [c for c in [
+    "chain-shot-participant", "chain-goal-participant", "chain-final-action",
+] if c in df.columns]
+CHAIN_PART_LABELS = {
+    "chain-shot-participant": "Shot Chain Participations",
+    "chain-goal-participant": "Goal Chain Participations",
+    "chain-final-action":     "Final Actions Before Shot",
+}
+CHAIN_HARM_COLS = [c for c in [
+    "chain-turnover-precedes-shot", "chain-turnover-precedes-goal",
+    "chain-turnover-final-actor", "chain-conceded-shot", "chain-conceded-goal",
+] if c in df.columns]
+CHAIN_HARM_LABELS = {
+    "chain-turnover-precedes-shot":  "Turnovers → Opp. Shot",
+    "chain-turnover-precedes-goal":  "Turnovers → Opp. Goal",
+    "chain-turnover-final-actor":    "Final Actor in Turnover Chain",
+    "chain-conceded-shot":           "Defensive Actions in Conceded Shot Chain",
+    "chain-conceded-goal":           "Defensive Actions in Conceded Goal Chain",
+}
+CHAIN_SCORE_COLS = [c for c in ["chainScore", "chainWasteScore", "chainNetScore"] if c in df.columns]
+CHAIN_SCORE_LABELS = {
+    "chainScore":      "Chain Performance Score",
+    "chainWasteScore": "Chain Waste Score",
+    "chainNetScore":   "Chain Net Score",
+}
+HAS_CHAIN_DATA = bool(CHAIN_PART_COLS or CHAIN_SCORE_COLS)
+
 # ---------------------------------------------------------------------------
 # Sidebar filters
 # ---------------------------------------------------------------------------
@@ -292,18 +320,22 @@ for col in SCORE_COLS:
 # ---------------------------------------------------------------------------
 # Summary metrics
 # ---------------------------------------------------------------------------
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Players", len(player_df))
-col2.metric("Avg Performance", f"{player_df['playerankScore'].mean():.4f}" if "playerankScore" in player_df else "—")
-col3.metric("Avg Waste", f"{player_df['wasteScore'].mean():.4f}" if "wasteScore" in player_df else "—")
-col4.metric("Avg Net Score", f"{player_df['netScore'].mean():.4f}" if "netScore" in player_df else "—")
+col2.metric("Avg Performance", f"{player_df['playerankScore'].mean():.4f}" if "playerankScore" in player_df.columns else "—")
+col3.metric("Avg Waste", f"{player_df['wasteScore'].mean():.4f}" if "wasteScore" in player_df.columns else "—")
+col4.metric("Avg Net Score", f"{player_df['netScore'].mean():.4f}" if "netScore" in player_df.columns else "—")
+col5.metric("Avg Chain Net", f"{player_df['chainNetScore'].mean():.4f}" if "chainNetScore" in player_df.columns else "—")
 
 st.divider()
 
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏆 Leaderboard", "📊 Score Analysis", "🎭 Role Breakdown", "👤 Player Profile", "⚙️ Feature Weights"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "🏆 Leaderboard", "📊 Score Analysis", "🎭 Role Breakdown",
+    "⛓️ Chain Analytics", "👤 Player Profile", "⚙️ Feature Weights",
+])
 
 # ── Tab 1: Leaderboard ──────────────────────────────────────────────────────
 with tab1:
@@ -452,8 +484,218 @@ with tab3:
         )
         st.dataframe(role_summary, use_container_width=True, hide_index=True)
 
-# ── Tab 4: Player Profile ───────────────────────────────────────────────────
+# ── Tab 4: Chain Analytics ──────────────────────────────────────────────────
 with tab4:
+    st.subheader("Chain Analytics")
+    st.markdown(
+        "Evaluate players based on their participation in **possession chains** — "
+        "multi-event sequences leading to shots, goals, or dangerous turnovers. "
+        "Run the full pipeline to populate chain columns in `dashboard_data.csv`."
+    )
+
+    if not HAS_CHAIN_DATA:
+        st.info(
+            "No chain data found in `dashboard_data.csv`. "
+            "Chain features will be available after the chain context model is integrated "
+            "into `compute_playerank.py` and the pipeline is re-run:\n\n"
+            "```\npython run_pipeline.py\n```"
+        )
+    else:
+        # ── Section 1: Chain score summary ───────────────────────────────────
+        if CHAIN_SCORE_COLS:
+            st.markdown("### Chain Score Summary")
+            cs_cols = st.columns(len(CHAIN_SCORE_COLS))
+            for col, sc in zip(cs_cols, CHAIN_SCORE_COLS):
+                col.metric(
+                    CHAIN_SCORE_LABELS.get(sc, sc),
+                    f"{player_df[sc].mean():.4f}" if sc in player_df.columns else "—",
+                )
+
+            if "chainScore" in player_df.columns and "chainWasteScore" in player_df.columns:
+                st.markdown("#### Chain Performance vs Chain Waste")
+                st.markdown(
+                    "Players in the **bottom-right** generate dangerous chains while rarely "
+                    "appearing in harmful turnover sequences (ideal). "
+                    "Players in the **top-left** are a net negative in sequential play."
+                )
+                fig_cs = px.scatter(
+                    player_df,
+                    x="chainScore", y="chainWasteScore",
+                    color="chainNetScore" if "chainNetScore" in player_df.columns else None,
+                    size="matchesPlayed",
+                    hover_name="playerName",
+                    hover_data={
+                        "roleCluster": True, "matchesPlayed": True,
+                        "chainScore": ":.4f", "chainWasteScore": ":.4f",
+                        "chainNetScore": ":.4f" if "chainNetScore" in player_df.columns else False,
+                    },
+                    color_continuous_scale="RdYlGn",
+                    labels={
+                        "chainScore": "Chain Performance Score",
+                        "chainWasteScore": "Chain Waste Score",
+                        "chainNetScore": "Chain Net Score",
+                        "matchesPlayed": "Matches Played",
+                    },
+                    title="Chain Score vs Chain Waste (size = matches played, colour = chain net score)",
+                )
+                cx_mid = player_df["chainScore"].median()
+                cy_mid = player_df["chainWasteScore"].median()
+                fig_cs.add_vline(x=cx_mid, line_dash="dot", line_color="grey", opacity=0.4)
+                fig_cs.add_hline(y=cy_mid, line_dash="dot", line_color="grey", opacity=0.4)
+                fig_cs.update_layout(height=500)
+                st.plotly_chart(fig_cs, use_container_width=True)
+
+        st.divider()
+
+        # ── Section 2: Chain participation leaderboard ────────────────────────
+        if CHAIN_PART_COLS:
+            st.markdown("### Chain Participation")
+            st.markdown(
+                "Average chain participations **per match** for each player. "
+                "`Goal Chain Participations` counts chains ending in a goal the player "
+                "touched the ball in. `Final Actions Before Shot` is the key-pass analog."
+            )
+
+            sort_col = "chain-goal-participant" if "chain-goal-participant" in player_df.columns \
+                else CHAIN_PART_COLS[0]
+            top_n_chain = st.slider("Show top N players", 5, 50, 20, key="chain_top_n")
+            chain_part_df = (
+                player_df[["playerName", "roleCluster", "matchesPlayed"] + CHAIN_PART_COLS]
+                .nlargest(top_n_chain, sort_col)
+                .rename(columns={**{"playerName": "Player", "roleCluster": "Role",
+                                    "matchesPlayed": "Matches"}, **CHAIN_PART_LABELS})
+            )
+            st.dataframe(chain_part_df, use_container_width=True, hide_index=True)
+
+            # Scatter: shot-chain vs goal-chain participation
+            if "chain-shot-participant" in player_df.columns and "chain-goal-participant" in player_df.columns:
+                st.markdown("#### Shot Chain vs Goal Chain Participation")
+                st.markdown(
+                    "Players to the **right** reach the shot phase often. "
+                    "Players **higher up** appear in chains that actually result in goals — "
+                    "a marker of clinical build-up involvement."
+                )
+                fig_part = px.scatter(
+                    player_df,
+                    x="chain-shot-participant", y="chain-goal-participant",
+                    color="roleCluster" if "roleCluster" in player_df.columns else None,
+                    size="matchesPlayed",
+                    hover_name="playerName",
+                    hover_data={
+                        "roleCluster": True, "matchesPlayed": True,
+                        "chain-shot-participant": ":.2f",
+                        "chain-goal-participant": ":.2f",
+                        "chain-final-action": ":.2f" if "chain-final-action" in player_df.columns else False,
+                    },
+                    labels={
+                        "chain-shot-participant": "Shot Chain Participations / match",
+                        "chain-goal-participant": "Goal Chain Participations / match",
+                        "roleCluster": "Role",
+                    },
+                    title="Shot chain vs goal chain participation rate (size = matches played)",
+                )
+                fig_part.update_layout(height=480)
+                st.plotly_chart(fig_part, use_container_width=True)
+
+        st.divider()
+
+        # ── Section 3: Harmful chain leaderboard ─────────────────────────────
+        if CHAIN_HARM_COLS:
+            st.markdown("### Harmful Chain Involvement")
+            st.markdown(
+                "Players ranked by average involvement in chains that **directly preceded "
+                "a conceded goal** (`Turnovers → Opp. Goal`) or in chains where the "
+                "opponent scored (`Defensive Actions in Conceded Goal Chain`). "
+                "Lower values are better."
+            )
+
+            harm_sort = "chain-turnover-precedes-goal" if "chain-turnover-precedes-goal" in player_df.columns \
+                else CHAIN_HARM_COLS[0]
+            top_n_harm = st.slider("Show top N players", 5, 50, 20, key="harm_top_n")
+            harm_df = (
+                player_df[["playerName", "roleCluster", "matchesPlayed"] + CHAIN_HARM_COLS]
+                .nlargest(top_n_harm, harm_sort)
+                .rename(columns={**{"playerName": "Player", "roleCluster": "Role",
+                                    "matchesPlayed": "Matches"}, **CHAIN_HARM_LABELS})
+            )
+            st.dataframe(harm_df, use_container_width=True, hide_index=True)
+
+            # Scatter: turnover-precedes-shot vs conceded-goal
+            if "chain-turnover-precedes-shot" in player_df.columns and \
+               "chain-conceded-goal" in player_df.columns:
+                st.markdown("#### Turnover Chains vs Conceded Goal Chains")
+                st.markdown(
+                    "Players in the **top-right** are involved in both types of harmful chain — "
+                    "high turnover rate *and* frequently present when opponents score. "
+                    "Players near the **origin** are rarely involved in damaging sequences."
+                )
+                fig_harm = px.scatter(
+                    player_df,
+                    x="chain-turnover-precedes-shot", y="chain-conceded-goal",
+                    color="roleCluster" if "roleCluster" in player_df.columns else None,
+                    size="matchesPlayed",
+                    hover_name="playerName",
+                    hover_data={
+                        "roleCluster": True, "matchesPlayed": True,
+                        "chain-turnover-precedes-shot": ":.2f",
+                        "chain-turnover-precedes-goal": ":.2f" if "chain-turnover-precedes-goal" in player_df.columns else False,
+                        "chain-conceded-goal": ":.2f",
+                    },
+                    labels={
+                        "chain-turnover-precedes-shot": "Turnover Chains → Opp. Shot / match",
+                        "chain-conceded-goal": "Defensive Actions in Conceded Goal Chain / match",
+                        "roleCluster": "Role",
+                    },
+                    title="Turnover chain rate vs conceded goal chain involvement",
+                )
+                fig_harm.update_layout(height=480)
+                st.plotly_chart(fig_harm, use_container_width=True)
+
+        st.divider()
+
+        # ── Section 4: Chain pitch origin map ────────────────────────────────
+        st.markdown("### Chain Origin Map")
+        _CHAIN_MAP_JSON = _DATA / "chain_map.json"
+        if _CHAIN_MAP_JSON.exists():
+            @st.cache_data
+            def load_chain_map():
+                return json.loads(_CHAIN_MAP_JSON.read_text())
+
+            chain_map = load_chain_map()
+            outcome_filter = st.selectbox(
+                "Show chains ending in", ["goal", "shot"],
+                key="chain_map_outcome",
+            )
+            filtered_chains = [c for c in chain_map if c.get("outcome") == outcome_filter]
+            if filtered_chains:
+                fig_map = draw_soccer_field(None)
+                xs = [c["start_y"] for c in filtered_chains]   # Wyscout y → display x
+                ys = [c["start_x"] for c in filtered_chains]   # Wyscout x → display y
+                fig_map.add_trace(go.Histogram2dContour(
+                    x=xs, y=ys,
+                    colorscale="YlOrRd",
+                    reversescale=False,
+                    showscale=True,
+                    opacity=0.7,
+                    name=f"{outcome_filter.title()} chain origins",
+                    hoverinfo="skip",
+                ))
+                fig_map.update_layout(
+                    title=f"Origin positions of chains ending in a {outcome_filter}",
+                    height=420,
+                )
+                st.plotly_chart(fig_map, use_container_width=True)
+            else:
+                st.info(f"No chains with outcome '{outcome_filter}' found in chain_map.json.")
+        else:
+            st.info(
+                "Chain origin map requires `data/chain_map.json` — a precomputed file of "
+                "chain start positions generated by the pipeline. Re-run the pipeline once "
+                "chain features are integrated to generate this file."
+            )
+
+# ── Tab 5: Player Profile ───────────────────────────────────────────────────
+with tab5:
     st.subheader("Player Profile")
 
     player_options = (
@@ -551,12 +793,57 @@ with tab4:
         )
         st.plotly_chart(fig_bar, use_container_width=True)
 
+        # Chain participation timeline
+        player_chain_cols = [c for c in CHAIN_PART_COLS if c in player_matches.columns]
+        player_harm_cols  = [c for c in CHAIN_HARM_COLS  if c in player_matches.columns]
+        if player_chain_cols or player_harm_cols:
+            st.markdown("#### Chain participation per match")
+            fig_chain_timeline = go.Figure()
+            chain_colours = {
+                "chain-shot-participant":        "#3498db",
+                "chain-goal-participant":        "#2ecc71",
+                "chain-final-action":            "#f39c12",
+                "chain-turnover-precedes-shot":  "#e67e22",
+                "chain-turnover-precedes-goal":  "#e74c3c",
+                "chain-turnover-final-actor":    "#c0392b",
+                "chain-conceded-shot":           "#9b59b6",
+                "chain-conceded-goal":           "#6c3483",
+            }
+            xs_chain = list(range(len(player_matches)))
+            all_chain_cols = player_chain_cols + player_harm_cols
+            for ccol in all_chain_cols:
+                label = {**CHAIN_PART_LABELS, **CHAIN_HARM_LABELS}.get(ccol, ccol)
+                colour = chain_colours.get(ccol, "#95a5a6")
+                is_harm = ccol in player_harm_cols
+                fig_chain_timeline.add_trace(go.Scatter(
+                    x=xs_chain,
+                    y=player_matches[ccol].tolist(),
+                    mode="lines+markers",
+                    name=label,
+                    line=dict(color=colour, width=2,
+                              dash="dot" if is_harm else "solid"),
+                    marker=dict(color=colour, size=5),
+                    fill="tozeroy",
+                    fillcolor=colour.replace(")", ", 0.08)").replace("rgb", "rgba")
+                    if colour.startswith("rgb") else colour + "14",
+                    hovertemplate=f"Match %{{x}}<br>{label}: %{{y:.1f}}<extra></extra>",
+                ))
+            fig_chain_timeline.update_layout(
+                xaxis_title="Match (chronological)",
+                yaxis_title="Chain participations",
+                title=f"{name} — chain participation timeline "
+                      "(solid = positive, dashed = harmful)",
+                height=380,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(fig_chain_timeline, use_container_width=True)
+
         # Raw match data
         with st.expander("Raw match data"):
             st.dataframe(player_matches, use_container_width=True, hide_index=True)
 
-# ── Tab 5: Feature Weights ───────────────────────────────────────────────────
-with tab5:
+# ── Tab 6: Feature Weights ───────────────────────────────────────────────────
+with tab6:
     st.subheader("Feature Weights")
     st.markdown(
         "How much each event type and sub-type drives the **Performance** "
