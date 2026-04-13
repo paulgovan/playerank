@@ -1,5 +1,6 @@
 from .abstract import Feature
 from .wyscoutEventsDefinition import (INTERRUPTION, FOUL, OFFSIDE, SHOT,
+                                       DUEL, OTHERS,
                                        GOAL_TAG, NOT_ACCURATE_TAG,
                                        DANGEROUS_BALL_LOST_TAG, INTERCEPTION_TAG)
 import json
@@ -13,25 +14,34 @@ class chainFeatures(Feature):
 
     Groups consecutive same-team events within a match into possession chains,
     classifies each chain by its terminal event (goal / shot / none), then
-    produces three features per entity (player or team) per match:
+    produces per-entity (player or team) per-match counts for eight features:
 
-    - chain-shot-participant : number of chains ending in a shot (incl. goals)
-                               in which the entity touched the ball
-    - chain-goal-participant : number of chains ending in a goal in which
-                               the entity touched the ball
-    - chain-final-action     : number of times the entity made the last
-                               non-shot action before a shot/goal
+    Positive (credit for dangerous attacking sequences):
+      chain-shot-participant      chains ending in a shot the entity appeared in
+      chain-goal-participant      chains ending in a goal the entity appeared in
+      chain-final-action          last non-shot touch before a shot (key-pass analog)
+
+    Harmful (debit for sequences that precede or produce conceding):
+      chain-turnover-precedes-shot   in a chain whose turnover immediately preceded
+                                     an opponent shot
+      chain-turnover-precedes-goal   same, but the opponent scored
+      chain-turnover-final-actor     last actor before the turnover that led to
+                                     an opponent shot/goal
+      chain-conceded-shot            had a defensive action during an opp. shot chain
+      chain-conceded-goal            had a defensive action during an opp. goal chain
 
     Chain-breaking rules (a new chain starts when any of these hold):
-    - match period changes
-    - current event is INTERRUPTION (5), FOUL (2), or OFFSIDE (6)
-    - teamId changes between consecutive events
+      - match period changes
+      - current event is INTERRUPTION (5), FOUL (2), or OFFSIDE (6)
+      - teamId changes between consecutive events (conservative)
     """
 
     # Tags that indicate possession loss on the preceding event
     LOSS_TAGS = frozenset([NOT_ACCURATE_TAG, DANGEROUS_BALL_LOST_TAG, INTERCEPTION_TAG])
     # Event IDs that unconditionally break a chain
     BREAK_EVENTS = frozenset([INTERRUPTION, FOUL, OFFSIDE])
+    # Event IDs considered defensive actions for Type-2 (conceded chain) attribution
+    DEFENSIVE_EVENTS = frozenset([DUEL, OTHERS])
 
     def createFeature(self, events_path, players_file, entity='team'):
         """
@@ -73,7 +83,9 @@ class chainFeatures(Feature):
             )
 
             chains = self._detect_chains(events)
-            entity_features = self._compute_entity_features(chains, goalkeeper_ids, entity)
+            entity_features = self._compute_entity_features(
+                chains, events, goalkeeper_ids, entity
+            )
 
             for ent_id, feats in entity_features.items():
                 for feat_name, value in feats.items():
@@ -127,52 +139,126 @@ class chainFeatures(Feature):
         tag_ids = {t['id'] for t in last.get('tags', [])}
         return 'goal' if GOAL_TAG in tag_ids else 'shot'
 
-    def _compute_entity_features(self, chains, goalkeeper_ids, entity):
+    def _get_entity(self, evt, goalkeeper_ids, entity):
+        """Return the aggregation key for a single event, or None to skip."""
+        if entity == 'player':
+            pid = evt.get('playerId')
+            return pid if pid and pid not in goalkeeper_ids else None
+        return evt.get('teamId')
+
+    def _compute_entity_features(self, chains, all_match_events, goalkeeper_ids, entity):
         """
-        Accumulate chain participation counts per entity across all chains.
+        Accumulate positive and harmful chain counts per entity.
+
+        Parameters
+        ----------
+        chains : list of list
+            Possession chains for one match (output of _detect_chains).
+        all_match_events : list
+            All sorted events for the same match (needed for Type-2 attribution).
+        goalkeeper_ids : frozenset
+            Player IDs to exclude from player-level attribution.
+        entity : str
+            'player' or 'team'.
         """
         entity_features = defaultdict(lambda: defaultdict(int))
 
-        for chain in chains:
+        # Pre-index defensive events by team for fast Type-2 window lookup
+        def_events_by_team = defaultdict(list)
+        for e in all_match_events:
+            if e['eventId'] in self.DEFENSIVE_EVENTS:
+                tid = e.get('teamId')
+                if tid:
+                    def_events_by_team[tid].append(e)
+
+        teams_in_match = list({e['teamId'] for e in all_match_events
+                                if e.get('teamId')})
+
+        for i, chain in enumerate(chains):
             outcome = self._classify_chain(chain)
-            if outcome is None:
-                continue  # only credit chains that reach a shot
+            team_id = chain[0]['teamId']
 
-            # --- collect participants ---
-            participants = set()
-            for evt in chain:
-                if entity == 'player':
-                    pid = evt.get('playerId')
-                    if pid and pid not in goalkeeper_ids:
-                        participants.add(pid)
-                else:
-                    tid = evt.get('teamId')
-                    if tid:
-                        participants.add(tid)
+            # ── Positive features ─────────────────────────────────────────────
+            if outcome in ('shot', 'goal'):
+                # Collect unique entities in this chain (each credited once)
+                participants = set()
+                for evt in chain:
+                    ent = self._get_entity(evt, goalkeeper_ids, entity)
+                    if ent is not None:
+                        participants.add(ent)
 
-            # --- find the last non-shot actor ---
-            final_actor = None
-            for evt in reversed(chain):
-                if evt['eventId'] == SHOT:
+                for ent in participants:
+                    entity_features[ent]['chain-shot-participant'] += 1
+                    if outcome == 'goal':
+                        entity_features[ent]['chain-goal-participant'] += 1
+
+                # Last non-shot actor → final-action credit
+                for evt in reversed(chain):
+                    if evt['eventId'] == SHOT:
+                        continue
+                    ent = self._get_entity(evt, goalkeeper_ids, entity)
+                    if ent is not None:
+                        entity_features[ent]['chain-final-action'] += 1
+                        break
+
+            # ── Harmful Type 1: turnover chain ───────────────────────────────
+            # This chain had no shot; the very next chain (different team) ended
+            # in a shot or goal — our turnover gifted them the opportunity.
+            if outcome is None and i + 1 < len(chains):
+                next_chain = chains[i + 1]
+                next_team = next_chain[0]['teamId']
+                if next_team != team_id:
+                    next_outcome = self._classify_chain(next_chain)
+                    if next_outcome in ('shot', 'goal'):
+                        suffix = ('precedes-goal' if next_outcome == 'goal'
+                                  else 'precedes-shot')
+                        feat = 'chain-turnover-' + suffix
+
+                        participants = set()
+                        for evt in chain:
+                            ent = self._get_entity(evt, goalkeeper_ids, entity)
+                            if ent is not None:
+                                participants.add(ent)
+                        for ent in participants:
+                            entity_features[ent][feat] += 1
+
+                        # Last actor in the turnover chain
+                        for evt in reversed(chain):
+                            ent = self._get_entity(evt, goalkeeper_ids, entity)
+                            if ent is not None:
+                                entity_features[ent]['chain-turnover-final-actor'] += 1
+                                break
+
+            # ── Harmful Type 2: conceded chain ───────────────────────────────
+            # team_id's chain ended in shot/goal; debit the defending team's
+            # players who had defensive actions in the chain's time window.
+            if outcome in ('shot', 'goal'):
+                defending_teams = [t for t in teams_in_match if t != team_id]
+                if not defending_teams:
                     continue
-                if entity == 'player':
-                    pid = evt.get('playerId')
-                    if pid and pid not in goalkeeper_ids:
-                        final_actor = pid
-                        break
+                defending_team = defending_teams[0]
+                feat = ('chain-conceded-goal' if outcome == 'goal'
+                        else 'chain-conceded-shot')
+
+                if entity == 'team':
+                    entity_features[defending_team][feat] += 1
                 else:
-                    tid = evt.get('teamId')
-                    if tid:
-                        final_actor = tid
-                        break
+                    period_a = chain[0]['matchPeriod']
+                    t_start  = chain[0]['eventSec']
+                    t_end    = chain[-1]['eventSec']
 
-            # --- credit features ---
-            for ent in participants:
-                entity_features[ent]['chain-shot-participant'] += 1
-                if outcome == 'goal':
-                    entity_features[ent]['chain-goal-participant'] += 1
-
-            if final_actor is not None:
-                entity_features[final_actor]['chain-final-action'] += 1
+                    defenders = {
+                        e['playerId']
+                        for e in def_events_by_team[defending_team]
+                        if (e['matchPeriod'] == period_a
+                            and t_start <= e['eventSec'] <= t_end
+                            and e.get('playerId') not in goalkeeper_ids)
+                    }
+                    if defenders:
+                        for pid in defenders:
+                            entity_features[pid][feat] += 1
+                    else:
+                        # No specific defender identifiable; attribute to team
+                        entity_features[defending_team][feat] += 1
 
         return entity_features
