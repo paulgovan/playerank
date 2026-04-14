@@ -2,26 +2,30 @@ from pathlib import Path
 from ..models import Weighter
 from ..features import qualityFeatures, relativeAggregation, goalScoredFeatures
 from ..features import chainFeatures
+from ..features.featureFilters import filter_features
 
 _ROOT = Path(__file__).parent.parent.parent
 _DATA = _ROOT / 'data'
 _CONF = Path(__file__).parent.parent / 'conf'
 
 def compute_feature_weights(output_path):
-
+    # Option A: performance Weighter trains only on positive-outcome features
+    # so it is independent of the waste Weighter trained on negative-outcome features.
     qualityFeat = qualityFeatures.qualityFeatures()
     quality = qualityFeat.createFeature(events_path=str(_DATA / 'events' / '*.json'),
                         players_file=str(_DATA / 'players.json'), entity='team')
+    perf_quality = filter_features(quality, 'performance_quality')
 
     chainFeat = chainFeatures.chainFeatures()
     chains = chainFeat.createFeature(events_path=str(_DATA / 'events' / '*.json'),
                         players_file=str(_DATA / 'players.json'), entity='team')
+    pos_chains = filter_features(chains, 'positive_chain')
 
     gs = goalScoredFeatures.goalScoredFeatures()
     goals = gs.createFeature(str(_DATA / 'matches' / '*.json'))
 
     aggregation = relativeAggregation.relativeAggregation()
-    aggregation.set_features([quality, chains, goals])
+    aggregation.set_features([perf_quality, pos_chains, goals])
     df = aggregation.aggregate(to_dataframe=True)
 
     weighter = Weighter.Weighter(label_type='w-dl')

@@ -70,7 +70,11 @@ class chainFeatures(Feature):
         for file in glob.glob(events_path):
             data = json.load(open(file))
             for evt in data:
-                if evt['matchPeriod'] in ('1H', '2H'):
+                # Exclude penalty periods, unattributed events (playerId=0),
+                # and events with no team assignment (teamId=0 or missing)
+                if (evt['matchPeriod'] in ('1H', '2H')
+                        and evt.get('playerId', 0) != 0
+                        and evt.get('teamId', 0) != 0):
                     match_events[evt['matchId']].append(evt)
             print("[chainFeatures] loaded %s events from %s" % (len(data), file))
 
@@ -254,11 +258,9 @@ class chainFeatures(Feature):
                             and t_start <= e['eventSec'] <= t_end
                             and e.get('playerId') not in goalkeeper_ids)
                     }
-                    if defenders:
-                        for pid in defenders:
-                            entity_features[pid][feat] += 1
-                    else:
-                        # No specific defender identifiable; attribute to team
-                        entity_features[defending_team][feat] += 1
+                    for pid in defenders:
+                        entity_features[pid][feat] += 1
+                    # If no specific defender found in the time window, skip rather
+                    # than falling back to the team ID — avoids polluting player data.
 
         return entity_features

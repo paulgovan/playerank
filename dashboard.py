@@ -59,6 +59,10 @@ def load_data():
         for p in players:
             names[p["wyId"]] = p.get("shortName") or f"{p.get('firstName','')} {p.get('lastName','')}".strip()
 
+    # Drop entity=0 — these are unattributed events (playerId=0 in raw Wyscout data)
+    # that accumulate under a spurious entity and inflate match counts.
+    df = df[df["entity"] != 0].copy()
+
     df["playerName"] = df["entity"].map(names).fillna(df["entity"].astype(str))
     return df, names
 
@@ -219,6 +223,31 @@ if df is None:
     st.stop()
 
 # ---------------------------------------------------------------------------
+# Role cluster labels
+# Cluster 0 covers the largest pitch region (x 46–100, central/defensive zones)
+# and is correctly the most populated cluster. Labels are descriptive approximations
+# based on the centre-of-performance positions that K-means assigned to each cluster.
+# ---------------------------------------------------------------------------
+ROLE_LABELS = {
+    "0": "Central / Defensive Mid",
+    "1": "Left Wing / Wide Mid",
+    "2": "Right Wing / Wide Mid",
+    "3": "Centre-Back",
+    "4": "Attacking Mid / Forward",
+    "5": "Left Back",
+    "6": "Right Back",
+    "7": "Striker",
+    "8": "Defensive Mid",
+}
+
+def role_display(cluster_val):
+    """Return 'Cluster N — Description' for a cluster value (may be compound e.g. '0-3')."""
+    s = str(cluster_val)
+    primary = s.split("-")[0]
+    label = ROLE_LABELS.get(primary, "")
+    return f"Cluster {s} — {label}" if label else f"Cluster {s}"
+
+# ---------------------------------------------------------------------------
 # Score column detection
 # ---------------------------------------------------------------------------
 SCORE_COLS = [c for c in ["playerankScore", "wasteScore", "netScore"] if c in df.columns]
@@ -264,7 +293,9 @@ st.sidebar.header("Filters")
 roles = sorted(df["roleCluster"].dropna().unique()) if "roleCluster" in df.columns else []
 selected_roles = st.sidebar.multiselect(
     "Role cluster", options=roles, default=roles,
-    help="Filter by player role cluster"
+    format_func=role_display,
+    help="Filter by player role cluster. Cluster 0 (Central/Defensive Mid) is the "
+         "largest because it covers the biggest pitch zone in the K-means role matrix.",
 )
 
 min_matches = st.sidebar.slider(
@@ -302,8 +333,11 @@ if selected_roles and "roleCluster" in fdf.columns:
     fdf = fdf[fdf["roleCluster"].isin(selected_roles)]
 
 # Aggregate to player level (mean per match)
+# Include score columns AND all chain columns so the Chain Analytics tab can use them.
+_all_numeric = SCORE_COLS + CHAIN_PART_COLS + CHAIN_HARM_COLS + CHAIN_SCORE_COLS
+_agg_cols = [c for c in _all_numeric if c in fdf.columns]
 player_df = (
-    fdf.groupby(["entity", "playerName"])[SCORE_COLS]
+    fdf.groupby(["entity", "playerName"])[_agg_cols]
     .mean()
     .reset_index()
     .round(4)
@@ -655,6 +689,11 @@ with tab4:
 
         # ── Section 4: Chain pitch origin map ────────────────────────────────
         st.markdown("### Chain Origin Map")
+        st.markdown(
+            "Pitch heatmap showing where possession chains **begin** on the field. "
+            "Warmer colours indicate zones where more chains originate. "
+            "Attack direction is bottom → top (Wyscout coordinates)."
+        )
         _CHAIN_MAP_JSON = _DATA / "chain_map.json"
         if _CHAIN_MAP_JSON.exists():
             @st.cache_data
@@ -662,10 +701,19 @@ with tab4:
                 return json.loads(_CHAIN_MAP_JSON.read_text())
 
             chain_map = load_chain_map()
-            outcome_filter = st.selectbox(
-                "Show chains ending in", ["goal", "shot"],
-                key="chain_map_outcome",
-            )
+            _map_desc_col, _map_ctrl_col = st.columns([3, 1])
+            with _map_desc_col:
+                st.caption(
+                    f"Total chains in dataset: {len(chain_map):,}  ·  "
+                    f"Goal chains: {sum(1 for c in chain_map if c.get('outcome')=='goal'):,}  ·  "
+                    f"Shot chains: {sum(1 for c in chain_map if c.get('outcome')=='shot'):,}"
+                )
+            with _map_ctrl_col:
+                outcome_filter = st.selectbox(
+                    "Outcome", ["goal", "shot"],
+                    key="chain_map_outcome",
+                    label_visibility="collapsed",
+                )
             filtered_chains = [c for c in chain_map if c.get("outcome") == outcome_filter]
             if filtered_chains:
                 fig_map = draw_soccer_field(None)
@@ -680,18 +728,15 @@ with tab4:
                     name=f"{outcome_filter.title()} chain origins",
                     hoverinfo="skip",
                 ))
-                fig_map.update_layout(
-                    title=f"Origin positions of chains ending in a {outcome_filter}",
-                    height=420,
-                )
+                fig_map.update_layout(height=420)
                 st.plotly_chart(fig_map, use_container_width=True)
             else:
                 st.info(f"No chains with outcome '{outcome_filter}' found in chain_map.json.")
         else:
             st.info(
-                "Chain origin map requires `data/chain_map.json` — a precomputed file of "
-                "chain start positions generated by the pipeline. Re-run the pipeline once "
-                "chain features are integrated to generate this file."
+                "Chain origin map requires `data/chain_map.json`. "
+                "Re-run the pipeline to generate it:\n\n"
+                "```\npython run_pipeline.py\n```"
             )
 
 # ── Tab 5: Player Profile ───────────────────────────────────────────────────
@@ -824,18 +869,25 @@ with tab5:
                               dash="dot" if is_harm else "solid"),
                     marker=dict(color=colour, size=5),
                     fill="tozeroy",
-                    fillcolor=colour.replace(")", ", 0.08)").replace("rgb", "rgba")
-                    if colour.startswith("rgb") else colour + "14",
+                    fillcolor="rgba({},{},{},0.08)".format(
+                        int(colour[1:3], 16), int(colour[3:5], 16), int(colour[5:7], 16)
+                    ),
                     hovertemplate=f"Match %{{x}}<br>{label}: %{{y:.1f}}<extra></extra>",
                 ))
             fig_chain_timeline.update_layout(
                 xaxis_title="Match (chronological)",
                 yaxis_title="Chain participations",
-                title=f"{name} — chain participation timeline "
-                      "(solid = positive, dashed = harmful)",
-                height=380,
-                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                title=f"{name} — chain participation timeline",
+                height=420,
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.25,
+                    xanchor="center",
+                    x=0.5,
+                ),
             )
+            st.caption("Solid lines = positive chain involvement · Dashed lines = harmful chain involvement")
             st.plotly_chart(fig_chain_timeline, use_container_width=True)
 
         # Raw match data
