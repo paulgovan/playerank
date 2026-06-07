@@ -90,6 +90,14 @@ if 'playerankScore' in df.columns and 'wasteScore' in df.columns:
 if 'chainScore' in df.columns and 'chainWasteScore' in df.columns:
     df['chainNetScore'] = df['chainScore'] - df['chainWasteScore']
 
+# ── Per-90 normalisation ──────────────────────────────────────────────────────
+if 'minutesPlayed' in df.columns:
+    minutes_factor = df['minutesPlayed'].clip(lower=1) / 90
+    for col in ['playerankScore', 'wasteScore', 'netScore',
+                'chainScore', 'chainWasteScore', 'chainNetScore']:
+        if col in df.columns:
+            df[f'{col}_per90'] = df[col] / minutes_factor
+
 # ── Write chain_map.json ──────────────────────────────────────────────────────
 # For each chain ending in a shot or goal, record start position and outcome.
 # The dashboard uses this for the Chain Origin pitch heatmap.

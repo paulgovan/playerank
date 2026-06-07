@@ -256,6 +256,9 @@ SCORE_LABELS = {
     "wasteScore": "Waste Score",
     "netScore": "Net Score",
 }
+SCORE_COLS_PER90 = [f"{c}_per90" for c in SCORE_COLS if f"{c}_per90" in df.columns]
+SCORE_LABELS_PER90 = {f"{c}_per90": f"{SCORE_LABELS[c]} / 90" for c in SCORE_COLS if f"{c}_per90" in df.columns}
+HAS_PER90 = bool(SCORE_COLS_PER90)
 
 # Chain feature columns
 CHAIN_PART_COLS = [c for c in [
@@ -304,6 +307,25 @@ min_matches = st.sidebar.slider(
     value=5,
 )
 
+if HAS_PER90:
+    score_type = st.sidebar.radio(
+        "Score type",
+        options=["Per 90 min", "Raw"],
+        index=0,
+        help="Per 90 min normalises each match score by actual minutes played, "
+             "making substitutes and starters directly comparable.",
+    )
+    use_per90 = score_type == "Per 90 min"
+else:
+    use_per90 = False
+    st.sidebar.info(
+        "Per-90 scores not found. Re-run the pipeline to generate them:\n\n"
+        "```\npython run_pipeline.py\n```"
+    )
+
+ACTIVE_SCORE_COLS   = SCORE_COLS_PER90 if use_per90 else SCORE_COLS
+ACTIVE_SCORE_LABELS = SCORE_LABELS_PER90 if use_per90 else SCORE_LABELS
+
 # ── Sidebar: Role cluster field reference ────────────────────────────────────
 st.sidebar.divider()
 st.sidebar.subheader("Role Cluster Map")
@@ -334,7 +356,7 @@ if selected_roles and "roleCluster" in fdf.columns:
 
 # Aggregate to player level (mean per match)
 # Include score columns AND all chain columns so the Chain Analytics tab can use them.
-_all_numeric = SCORE_COLS + CHAIN_PART_COLS + CHAIN_HARM_COLS + CHAIN_SCORE_COLS
+_all_numeric = SCORE_COLS + SCORE_COLS_PER90 + CHAIN_PART_COLS + CHAIN_HARM_COLS + CHAIN_SCORE_COLS
 _agg_cols = [c for c in _all_numeric if c in fdf.columns]
 player_df = (
     fdf.groupby(["entity", "playerName"])[_agg_cols]
@@ -347,18 +369,22 @@ if "roleCluster" in fdf.columns:
     player_df["roleCluster"] = player_df["entity"].map(role_map)
 player_df["matchesPlayed"] = player_df["entity"].map(match_counts)
 
-# Percentile ranks (0–100) for each score column
-for col in SCORE_COLS:
+# Percentile ranks (0–100) for each score column (raw and per-90)
+for col in SCORE_COLS + SCORE_COLS_PER90:
     player_df[f"{col}_pct"] = player_df[col].rank(pct=True).mul(100).round(1)
 
 # ---------------------------------------------------------------------------
 # Summary metrics
 # ---------------------------------------------------------------------------
+_perf_col = "playerankScore_per90" if use_per90 and "playerankScore_per90" in player_df.columns else "playerankScore"
+_waste_col = "wasteScore_per90"     if use_per90 and "wasteScore_per90"     in player_df.columns else "wasteScore"
+_net_col   = "netScore_per90"       if use_per90 and "netScore_per90"       in player_df.columns else "netScore"
+_suffix    = " / 90" if use_per90 else ""
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Players", len(player_df))
-col2.metric("Avg Performance", f"{player_df['playerankScore'].mean():.4f}" if "playerankScore" in player_df.columns else "—")
-col3.metric("Avg Waste", f"{player_df['wasteScore'].mean():.4f}" if "wasteScore" in player_df.columns else "—")
-col4.metric("Avg Net Score", f"{player_df['netScore'].mean():.4f}" if "netScore" in player_df.columns else "—")
+col2.metric(f"Avg Performance{_suffix}", f"{player_df[_perf_col].mean():.4f}" if _perf_col in player_df.columns else "—")
+col3.metric(f"Avg Waste{_suffix}",       f"{player_df[_waste_col].mean():.4f}" if _waste_col in player_df.columns else "—")
+col4.metric(f"Avg Net Score{_suffix}",   f"{player_df[_net_col].mean():.4f}"   if _net_col   in player_df.columns else "—")
 col5.metric("Avg Chain Net", f"{player_df['chainNetScore'].mean():.4f}" if "chainNetScore" in player_df.columns else "—")
 
 st.divider()
@@ -374,10 +400,12 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # ── Tab 1: Leaderboard ──────────────────────────────────────────────────────
 with tab1:
     st.subheader("Player Leaderboard")
+    if use_per90:
+        st.caption("Scores are normalised per 90 minutes played — substitutes and starters are directly comparable.")
 
     score_choice = st.radio(
-        "Rank by", options=SCORE_COLS,
-        format_func=lambda c: SCORE_LABELS.get(c, c),
+        "Rank by", options=ACTIVE_SCORE_COLS,
+        format_func=lambda c: ACTIVE_SCORE_LABELS.get(c, c),
         horizontal=True,
     )
     top_n = st.slider("Show top/bottom N", min_value=5, max_value=50, value=20)
@@ -385,35 +413,39 @@ with tab1:
     top = player_df.nlargest(top_n, score_choice)
     bottom = player_df.nsmallest(top_n, score_choice)
 
+    _display_score_cols = ACTIVE_SCORE_COLS
+    _display_score_rename = ACTIVE_SCORE_LABELS
+
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown(f"**Top {top_n} — {SCORE_LABELS.get(score_choice, score_choice)}**")
+        st.markdown(f"**Top {top_n} — {ACTIVE_SCORE_LABELS.get(score_choice, score_choice)}**")
         st.dataframe(
-            top[["playerName", "roleCluster", "matchesPlayed"] + SCORE_COLS]
+            top[["playerName", "roleCluster", "matchesPlayed"] + _display_score_cols]
             .rename(columns={"playerName": "Player", "roleCluster": "Role",
-                              "matchesPlayed": "Matches"}),
+                              "matchesPlayed": "Matches", **_display_score_rename}),
             use_container_width=True, hide_index=True,
         )
     with c2:
-        st.markdown(f"**Bottom {top_n} — {SCORE_LABELS.get(score_choice, score_choice)}**")
+        st.markdown(f"**Bottom {top_n} — {ACTIVE_SCORE_LABELS.get(score_choice, score_choice)}**")
         st.dataframe(
-            bottom[["playerName", "roleCluster", "matchesPlayed"] + SCORE_COLS]
+            bottom[["playerName", "roleCluster", "matchesPlayed"] + _display_score_cols]
             .rename(columns={"playerName": "Player", "roleCluster": "Role",
-                              "matchesPlayed": "Matches"}),
+                              "matchesPlayed": "Matches", **_display_score_rename}),
             use_container_width=True, hide_index=True,
         )
 
     st.markdown("---")
     st.markdown("**Full player table**")
     pct_col = f"{score_choice}_pct"
-    display_cols = ["playerName", "roleCluster", "matchesPlayed"] + SCORE_COLS + (
+    display_cols = ["playerName", "roleCluster", "matchesPlayed"] + _display_score_cols + (
         [pct_col] if pct_col in player_df.columns else []
     )
     full_table = (
         player_df[display_cols]
         .sort_values(score_choice, ascending=False)
         .rename(columns={"playerName": "Player", "roleCluster": "Role",
-                          "matchesPlayed": "Matches", pct_col: "Percentile"})
+                          "matchesPlayed": "Matches", pct_col: "Percentile",
+                          **_display_score_rename})
     )
     st.dataframe(full_table, use_container_width=True, hide_index=True)
     st.download_button(
@@ -778,7 +810,7 @@ with tab5:
 
         # Match-by-match timeline
         st.markdown("#### Match-by-match scores")
-        available_scores = [c for c in SCORE_COLS if c in player_matches.columns]
+        available_scores = [c for c in ACTIVE_SCORE_COLS if c in player_matches.columns]
         if available_scores:
             timeline_df = player_matches[["match"] + available_scores].copy()
             timeline_df["match"] = timeline_df["match"].astype(str)
@@ -790,7 +822,10 @@ with tab5:
             )
 
             fig_line = go.Figure()
-            line_colours = {"playerankScore": "#2ecc71", "wasteScore": "#e74c3c", "netScore": "#3498db"}
+            line_colours = {
+                "playerankScore": "#2ecc71", "wasteScore": "#e74c3c", "netScore": "#3498db",
+                "playerankScore_per90": "#2ecc71", "wasteScore_per90": "#e74c3c", "netScore_per90": "#3498db",
+            }
             xs = list(range(len(timeline_df)))
             for score_col in available_scores:
                 colour = line_colours.get(score_col)
@@ -799,19 +834,19 @@ with tab5:
                 fig_line.add_trace(go.Scatter(
                     x=xs, y=raw_y,
                     mode="markers",
-                    name=f"{SCORE_LABELS.get(score_col, score_col)} (raw)",
+                    name=f"{ACTIVE_SCORE_LABELS.get(score_col, score_col)} (raw)",
                     marker=dict(color=colour, opacity=0.35, size=6),
                     showlegend=False,
-                    hovertemplate=f"Match %{{x}}<br>{SCORE_LABELS.get(score_col, score_col)}: %{{y:.4f}}<extra></extra>",
+                    hovertemplate=f"Match %{{x}}<br>{ACTIVE_SCORE_LABELS.get(score_col, score_col)}: %{{y:.4f}}<extra></extra>",
                 ))
                 # Rolling average as solid line
                 rolled = timeline_df[score_col].rolling(roll_window, min_periods=1).mean()
                 fig_line.add_trace(go.Scatter(
                     x=xs, y=rolled.tolist(),
                     mode="lines",
-                    name=SCORE_LABELS.get(score_col, score_col),
+                    name=ACTIVE_SCORE_LABELS.get(score_col, score_col),
                     line=dict(color=colour, width=2),
-                    hovertemplate=f"Match %{{x}}<br>{SCORE_LABELS.get(score_col, score_col)} ({roll_window}-match avg): %{{y:.4f}}<extra></extra>",
+                    hovertemplate=f"Match %{{x}}<br>{ACTIVE_SCORE_LABELS.get(score_col, score_col)} ({roll_window}-match avg): %{{y:.4f}}<extra></extra>",
                 ))
             fig_line.add_hline(y=0, line_dash="dash", line_color="grey", opacity=0.5)
             fig_line.update_layout(
@@ -825,7 +860,7 @@ with tab5:
 
         # Summary bar chart
         st.markdown("#### Average scores")
-        avg_scores = {SCORE_LABELS.get(c, c): player_matches[c].mean() for c in available_scores}
+        avg_scores = {ACTIVE_SCORE_LABELS.get(c, c): player_matches[c].mean() for c in available_scores}
         fig_bar = go.Figure(go.Bar(
             x=list(avg_scores.keys()),
             y=list(avg_scores.values()),
